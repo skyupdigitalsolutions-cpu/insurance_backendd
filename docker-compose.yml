@@ -1,0 +1,53 @@
+# Local development services.
+#   docker compose up -d                  → MongoDB + Redis only (run the API with: npm run dev)
+#   docker compose --profile full up -d   → also runs the API and the background worker in containers
+services:
+  mongo:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"] # replica set = transactions available (same as Atlas)
+    ports: ["27017:27017"]
+    volumes: ["mongo-data:/data/db"]
+    healthcheck:
+      # first run: create the one-member replica set; afterwards: just check it
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok }"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    profiles: ["full"]
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/insurance?directConnection=true
+      REDIS_URL: redis://redis:6379
+    ports: ["4000:4000"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: .
+    profiles: ["full"]
+    command: ["node", "dist/worker.js"]
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/insurance?directConnection=true
+      REDIS_URL: redis://redis:6379
+    healthcheck: { disable: true } # no HTTP port; the admin panel shows whether it is online
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+volumes:
+  mongo-data:
